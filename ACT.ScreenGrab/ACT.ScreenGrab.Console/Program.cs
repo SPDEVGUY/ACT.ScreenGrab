@@ -7,6 +7,13 @@ using System.IO;
 using System.Diagnostics;
 
 using Microsoft.VisualBasic.FileIO;
+using System.Collections.ObjectModel;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Reflection;
+using OpenQA.Selenium.Remote;
+using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 
 namespace ACT.ScreenGrab.ConsoleApp
 {
@@ -32,6 +39,14 @@ namespace ACT.ScreenGrab.ConsoleApp
                 Process.Start(urlList);
             } else
             {
+                
+                /*
+                 other driver options...
+                    OpenQA.Selenium.Firefox.FirefoxDriver
+                    OpenQA.Selenium.IE.InternetExplorerDriver
+                    OpenQA.Selenium.Opera.OperaDriver
+                */
+
                 using (var driver = new OpenQA.Selenium.Chrome.ChromeDriver())
                 {
                     try
@@ -45,7 +60,7 @@ namespace ACT.ScreenGrab.ConsoleApp
                             csvParser.HasFieldsEnclosedInQuotes = true;
 
                             // Skip the row with the column names
-                            csvParser.ReadLine();
+                            csvParser.ReadLine();     
 
                             var urlIndex = 0;
                             while (!csvParser.EndOfData)
@@ -56,8 +71,10 @@ namespace ACT.ScreenGrab.ConsoleApp
                                 var selector = fields.Length > 1 ? fields[1] : null;
 
                                 n.GoToUrl(url);
-                                var fileName = $"URL_{urlIndex}.png";
-                                TakeSnapshot(driver, fileName, selector);
+                                var fileName = $"URL_{urlIndex}";
+                                TakeSnapshot(driver, $"{fileName}.png", selector);
+                                SaveConsoleLogs(driver, fileName);
+
                                 urlIndex++;
                             }
                         }
@@ -74,7 +91,45 @@ namespace ACT.ScreenGrab.ConsoleApp
             }
         }
 
+        public static void SaveConsoleLogs(IWebDriver driver, string fileNamePrefix)
+        {
+            //var logs = driver.Manage().Logs;
+            //ReadOnlyCollection<string> logTypes = logs.AvailableLogTypes;            
 
+            var logs = driver.GetBrowserLogs();
+
+            var sb = new StringBuilder();
+            sb.AppendLine("\"LogType\",\"Timestamp\",\"Level\",\"Message\"");
+            var hasContents = false;
+
+            //foreach (var logType in logTypes)
+            //{
+                //var logContents = logs.GetLog(logType);
+                //foreach(var le in logContents)
+                //{
+                //sb.AppendLine($"\"{logType}\",\"{le.Timestamp}\",\"{le.Level}\",\"{le.Message.Replace("\"", "\"\"")}\"");
+                //hasContents = true;
+                //}
+            //}
+
+            foreach(var log in logs)
+            {
+                //level, message, source, timestamp
+                var level = log["level"]?.ToString();
+                var message = log["message"]?.ToString();
+                var source = log["source"]?.ToString();
+                var timestamp = log["timestamp"]?.ToString();
+
+                sb.AppendLine($"\"{source}\",\"{timestamp}\",\"{level}\",\"{message.Replace("\"", "\"\"").Replace(Environment.NewLine,"\\r\\n")}\"");
+                hasContents = true;
+            }
+
+            if (hasContents)
+            {
+                var outPath = Path.Combine(ScreenshotDirectory, $"{fileNamePrefix}_log.csv");
+                File.WriteAllText(outPath, sb.ToString(), Encoding.UTF8);
+            }
+        }
 
         /// <summary>
         /// Take a screenshot of the whole page by merging the results of scrolling together.
@@ -208,6 +263,78 @@ namespace ACT.ScreenGrab.ConsoleApp
 
                 return result;
             }
+        }
+    }
+
+    //Extensionsion needed until Selenium 4.0 because they explode with a NullReferenceException on getting AvailableLogTypes
+    public static class WebDriverExtensions
+    {
+        public static IEnumerable<IDictionary<string, object>> GetBrowserLogs(this IWebDriver driver)
+        {
+            // setup
+            var endpoint = GetEndpoint(driver);
+            var session = GetSession(driver);
+            var resource = $"{endpoint}session/{session}/se/log";
+            const string jsonBody = @"{""type"":""browser""}";
+
+            // execute
+            using (var httpClient = new HttpClient())
+            {
+                var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+                var response = httpClient.PostAsync(resource, content).GetAwaiter().GetResult();
+                var responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                return AsLogEntries(responseBody);
+            }
+        }
+
+        private static string GetEndpoint(IWebDriver driver)
+        {
+            // setup
+            const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+
+            // get RemoteWebDriver type
+            var remoteWebDriver = GetRemoteWebDriver(driver.GetType());
+
+            // get this instance executor > get this instance internalExecutor
+            var executor = remoteWebDriver.GetField("executor", Flags).GetValue(driver) as DriverServiceCommandExecutor;
+            var internalExecutor = executor.GetType().GetField("internalExecutor", Flags).GetValue(executor) as HttpCommandExecutor;
+
+            // get URL
+            var uri = internalExecutor.GetType().GetField("remoteServerUri", Flags).GetValue(internalExecutor) as Uri;
+
+            // result
+            return uri.AbsoluteUri;
+        }
+
+        private static Type GetRemoteWebDriver(Type type)
+        {
+            if (!typeof(RemoteWebDriver).IsAssignableFrom(type))
+            {
+                return type;
+            }
+
+            while (type != typeof(RemoteWebDriver))
+            {
+                type = type.BaseType;
+            }
+
+            return type;
+        }
+
+        private static SessionId GetSession(IWebDriver driver)
+        {
+            if (driver is IHasSessionId id)
+            {
+                return id.SessionId;
+            }
+            return new SessionId($"gravity-{Guid.NewGuid()}");
+        }
+
+        private static IEnumerable<IDictionary<string, object>> AsLogEntries(string responseBody)
+        {
+            // setup
+            var value = $"{JToken.Parse(responseBody)["value"]}";
+            return JsonConvert.DeserializeObject<IEnumerable<Dictionary<string, object>>>(value);
         }
     }
 }
