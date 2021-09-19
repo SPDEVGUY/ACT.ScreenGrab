@@ -17,15 +17,61 @@ using Newtonsoft.Json;
 
 namespace ACT.ScreenGrab.ConsoleApp
 {
+    //Notes on driver urls:
+    /*
+     * FireFox/GeckoDriver - https://github.com/mozilla/geckodriver/releases
+     *  https://github.com/mozilla/geckodriver/releases/download/v0.30.0/geckodriver-v0.30.0-win64.zip
+     * 
+     * ChromeDriver - https://chromedriver.chromium.org/downloads
+     *  https://chromedriver.storage.googleapis.com/index.html?path=94.0.4606.41/ - alpha channel (2021-09-18)
+     *  https://chromedriver.storage.googleapis.com/index.html?path=93.0.4577.63/ - Release (get this one 2021-09-18)
+     *  
+     * InternetExplorer - https://www.selenium.dev/downloads/
+     *  https://github.com/SeleniumHQ/selenium/releases/download/selenium-3.150.0/IEDriverServer_x64_3.150.2.zip
+     *  https://github.com/SeleniumHQ/selenium/wiki/InternetExplorerDriver#required-configuration
+     */
+
+
+
     class Program
     {
-        public static readonly string ScreenshotDirectory = Environment.CurrentDirectory + @"\screenshots\";
+        public static string ScreenshotDirectory = Environment.CurrentDirectory + @"\screenshots\{0}";
         public const ScreenshotImageFormat OutputFormat = ScreenshotImageFormat.Png;
 
         public static readonly string UrlListFile = "pages.csv";
+        public static string DriverName = "Chrome";
+
+        static IWebDriver GetDriver(string name)
+        {
+            switch(name)
+            {
+                case "Chrome": return new OpenQA.Selenium.Chrome.ChromeDriver();
+                case "Firefox": return new OpenQA.Selenium.Firefox.FirefoxDriver();
+                case "InternetExplorer": return new OpenQA.Selenium.IE.InternetExplorerDriver();
+                case "Opera": return new OpenQA.Selenium.Opera.OperaDriver();
+            }
+
+            throw new ArgumentException($"Driver name {name}, not found.  Use one of these: Chrome,Firefox,InternetExplorer,Opera.");
+        }
 
         static void Main(string[] args)
         {
+            if (args.Length != 0) DriverName = args[0];
+
+            if(
+                DriverName != "Chrome"
+                && DriverName != "Firefox"
+                && DriverName != "InternetExplorer"
+                && DriverName != "Opera"
+                )
+            {
+                Console.WriteLine($"Driver name {DriverName}, not found.  Use one of these (case sensitive): Chrome, Firefox, InternetExplorer, Opera.");
+                return;
+            }
+
+
+            ScreenshotDirectory = $"{Environment.CurrentDirectory}\\screenshots\\{DriverName}\\";
+
             var urlList = Path.Combine(Environment.CurrentDirectory, UrlListFile);
             if (!File.Exists(urlList))
             {
@@ -47,7 +93,7 @@ namespace ACT.ScreenGrab.ConsoleApp
                     OpenQA.Selenium.Opera.OperaDriver
                 */
 
-                using (var driver = new OpenQA.Selenium.Chrome.ChromeDriver())
+                using (var driver = GetDriver(DriverName))
                 {
                     try
                     {
@@ -126,7 +172,7 @@ namespace ACT.ScreenGrab.ConsoleApp
 
             if (hasContents)
             {
-                var outPath = Path.Combine(ScreenshotDirectory, $"{fileNamePrefix}_log.csv");
+                var outPath = Path.Combine(string.Format(ScreenshotDirectory,DriverName), $"{fileNamePrefix}_log.csv");
                 File.WriteAllText(outPath, sb.ToString(), Encoding.UTF8);
             }
         }
@@ -143,10 +189,10 @@ namespace ACT.ScreenGrab.ConsoleApp
             driver.Manage().Window.FullScreen();
 
             IJavaScriptExecutor js = driver as IJavaScriptExecutor;
-            var fileLocation = Path.Combine(ScreenshotDirectory, fileName);
-            if (!Directory.Exists(ScreenshotDirectory))
+            var fileLocation = Path.Combine(string.Format(ScreenshotDirectory, DriverName), fileName);
+            if (!Directory.Exists(string.Format(ScreenshotDirectory, DriverName)))
             {
-                Directory.CreateDirectory(ScreenshotDirectory);
+                Directory.CreateDirectory(string.Format(ScreenshotDirectory, DriverName));
             }
 
             // get the full page height and current browser height
